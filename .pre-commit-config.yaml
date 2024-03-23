@@ -4,6 +4,11 @@ fail_fast: true
 default_stages: [commit]
 
 repos:
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.3.0
+    hooks:
+      - id: mypy
+
   - repo: https://github.com/psf/black
     rev: 23.3.0
     hooks:
