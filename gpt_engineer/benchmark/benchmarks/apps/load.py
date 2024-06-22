@@ -16,15 +16,14 @@ from typing import Union
 
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 
+from gpt_engineer.benchmark.bench_config import AppsConfig
 from gpt_engineer.benchmark.benchmarks.apps.problem import Problem
-from gpt_engineer.benchmark.benchmarks.apps.problems import PROBLEM_IDS
 from gpt_engineer.benchmark.types import Assertable, Benchmark, Task
 from gpt_engineer.core.default.disk_execution_env import DiskExecutionEnv
 from gpt_engineer.core.files_dict import FilesDict
 from gpt_engineer.core.prompt import Prompt
 
-DATASET_PATH = Path("gpt_engineer/benchmark/benchmarks/apps/dataset")
-MAX_N_TEST_EXAMPLES = 10
+DATASET_PATH = Path(__file__).parent / "dataset"
 
 
 class AppsAssertion:
@@ -57,12 +56,12 @@ def _get_dataset() -> Union[Dataset, DatasetDict]:
         print("Dataset not found locally, downloading...")
 
     dataset = load_dataset("codeparrot/apps", trust_remote_code=True)
-    dataset.save_to_disk(DATASET_PATH)
+    dataset.save_to_disk(str(DATASET_PATH))
 
     return dataset
 
 
-def load_apps():
+def load_apps(config: AppsConfig) -> Benchmark:
     """
     Loads the APPS benchmark, which consists of a series coding problems.
 
@@ -73,17 +72,19 @@ def load_apps():
     """
     dataset = _get_dataset()
     tasks = []
-
-    problems = [
-        Problem(
-            id=problem["problem_id"],
-            question=problem["question"],
-            input_output=problem["input_output"],
-            starter_code=problem["starter_code"],
-        )
-        for problem in dataset["test"]
-        if problem["problem_id"] in PROBLEM_IDS
-    ]
+    problems = list()
+    for dataset_type in ["test", "train"]:
+        problems += [
+            Problem(
+                id=problem["problem_id"],
+                question=problem["question"],
+                input_output=problem["input_output"],
+                starter_code=problem["starter_code"],
+            )
+            for index, problem in enumerate(dataset[dataset_type])
+            if (index < config.__getattribute__(dataset_type + "_end_index"))
+            and (index >= config.__getattribute__(dataset_type + "_start_index"))
+        ]
 
     for problem in problems:
         prompt = Prompt(
@@ -104,12 +105,14 @@ def load_apps():
                         expected=problem.outputs[i],
                         command="python main.py" + ' "' + problem.inputs[i] + '"',
                     ).evaluate
-                    for i in range(min(len(problem.outputs), MAX_N_TEST_EXAMPLES))
+                    for i in range(
+                        min(len(problem.outputs), config.examples_per_problem)
+                    )
                 },
             )
         )
 
     return Benchmark(
-        name="APPS",
+        name="apps",
         tasks=tasks,
     )

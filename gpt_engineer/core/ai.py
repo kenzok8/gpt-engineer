@@ -87,7 +87,7 @@ class AI:
 
     def __init__(
         self,
-        model_name="gpt-4-0125-preview",
+        model_name="gpt-4-turbo",
         temperature=0.1,
         azure_endpoint=None,
         streaming=True,
@@ -107,7 +107,11 @@ class AI:
         self.azure_endpoint = azure_endpoint
         self.model_name = model_name
         self.streaming = streaming
-        self.vision = "vision" in model_name
+        self.vision = (
+            ("vision-preview" in model_name)
+            or ("gpt-4-turbo" in model_name and "preview" not in model_name)
+            or ("claude" in model_name)
+        )
         self.llm = self._create_chat_model()
         self.token_usage_log = TokenUsageLog(model_name)
 
@@ -342,7 +346,9 @@ class AI:
         if self.azure_endpoint:
             return AzureChatOpenAI(
                 azure_endpoint=self.azure_endpoint,
-                openai_api_version=os.getenv("OPENAI_API_VERSION", "2023-05-15"),
+                openai_api_version=os.getenv(
+                    "OPENAI_API_VERSION", "2024-05-01-preview"
+                ),
                 deployment_name=self.model_name,
                 openai_api_type="azure",
                 streaming=self.streaming,
@@ -380,7 +386,8 @@ def serialize_messages(messages: List[Message]) -> str:
 class ClipboardAI(AI):
     # Ignore not init superclass
     def __init__(self, **_):  # type: ignore
-        pass
+        self.vision = False
+        self.token_usage_log = TokenUsageLog("clipboard_llm")
 
     @staticmethod
     def serialize_messages(messages: List[Message]) -> str:

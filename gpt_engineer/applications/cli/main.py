@@ -36,8 +36,8 @@ import openai
 import typer
 
 from dotenv import load_dotenv
-from langchain.cache import SQLiteCache
 from langchain.globals import set_llm_cache
+from langchain_community.cache import SQLiteCache
 from termcolor import colored
 
 from gpt_engineer.applications.cli.cli_agent import CliAgent
@@ -60,7 +60,9 @@ from gpt_engineer.core.preprompts_holder import PrepromptsHolder
 from gpt_engineer.core.prompt import Prompt
 from gpt_engineer.tools.custom_steps import clarified_gen, lite_gen, self_heal
 
-app = typer.Typer()  # creates a CLI app
+app = typer.Typer(
+    context_settings={"help_option_names": ["-h", "--help"]}
+)  # creates a CLI app
 
 
 def load_env_if_needed():
@@ -76,6 +78,7 @@ def load_env_if_needed():
         load_dotenv()
     if os.getenv("OPENAI_API_KEY") is None:
         load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"))
+
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     if os.getenv("ANTHROPIC_API_KEY") is None:
@@ -246,7 +249,9 @@ def prompt_yesno() -> bool:
 )
 def main(
     project_path: str = typer.Argument(".", help="path"),
-    model: str = typer.Argument("gpt-4-0125-preview", help="model id string"),
+    model: str = typer.Option(
+        os.environ.get("MODEL_NAME", "gpt-4o"), "--model", "-m", help="model id string"
+    ),
     temperature: float = typer.Option(
         0.1,
         "--temperature",
@@ -321,6 +326,11 @@ def main(
         "--use_cache",
         help="Speeds up computations and saves tokens when running the same prompt multiple times by caching the LLM response.",
     ),
+    no_execution: bool = typer.Option(
+        False,
+        "--no_execution",
+        help="Run setup but to not call LLM or write any code. For testing purposes.",
+    ),
 ):
     """
     The main entry point for the CLI tool that generates or improves a project.
@@ -359,6 +369,8 @@ def main(
         Speeds up computations and saves tokens when running the same prompt multiple times by caching the LLM response.
     verbose : bool
         Flag indicating whether to enable verbose logging.
+    no_execution: bool
+        Run setup but to not call LLM or write any code. For testing purposes.
 
     Returns
     -------
@@ -443,35 +455,43 @@ def main(
     )
 
     files = FileStore(project_path)
-    if improve_mode:
-        files_dict_before = FileSelector(project_path).ask_for_files()
-        files_dict = handle_improve_mode(prompt, agent, memory, files_dict_before)
-        if not files_dict or files_dict_before == files_dict:
-            print(
-                f"No changes applied. Could you please upload the debug_log_file.txt in {memory.path} folder in a github issue?"
-            )
+    if not no_execution:
+        if improve_mode:
+            files_dict_before, is_linting = FileSelector(project_path).ask_for_files()
+
+            # lint the code
+            if is_linting:
+                files_dict_before = files.linting(files_dict_before)
+
+            files_dict = handle_improve_mode(prompt, agent, memory, files_dict_before)
+            if not files_dict or files_dict_before == files_dict:
+                print(
+                    f"No changes applied. Could you please upload the debug_log_file.txt in {memory.path}/logs folder in a github issue?"
+                )
+
+            else:
+                print("\nChanges to be made:")
+                compare(files_dict_before, files_dict)
+
+                print()
+                print(colored("Do you want to apply these changes?", "light_green"))
+                if not prompt_yesno():
+                    files_dict = files_dict_before
 
         else:
-            print("\nChanges to be made:")
-            compare(files_dict_before, files_dict)
+            files_dict = agent.init(prompt)
+            # collect user feedback if user consents
+            config = (code_gen_fn.__name__, execution_fn.__name__)
+            collect_and_send_human_review(prompt, model, temperature, config, memory)
 
-            print()
-            print(colored("Do you want to apply these changes?", "light_green"))
-            if not prompt_yesno():
-                files_dict = files_dict_before
+        stage_uncommitted_to_git(path, files_dict, improve_mode)
 
-    else:
-        files_dict = agent.init(prompt)
-        # collect user feedback if user consents
-        config = (code_gen_fn.__name__, execution_fn.__name__)
-        collect_and_send_human_review(prompt, model, temperature, config, memory)
-
-    stage_uncommitted_to_git(path, files_dict, improve_mode)
-
-    files.push(files_dict)
+        files.push(files_dict)
 
     if ai.token_usage_log.is_openai_model():
         print("Total api cost: $ ", ai.token_usage_log.usage_cost())
+    elif os.getenv("LOCAL_MODEL"):
+        print("Total api cost: $ 0.0 since we are using local LLM.")
     else:
         print("Total tokens used: ", ai.token_usage_log.total_tokens())
 
